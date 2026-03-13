@@ -1,0 +1,12 @@
+[project]
+name = "lab-msa-service"
+version = "0.1.0"
+description = "MSA AI 어시스턴트 서비스 분해 시연"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.34",
+    "httpx>=0.28",
+    "openai>=1.0",
+    "python-dotenv>=1.0",
+]
