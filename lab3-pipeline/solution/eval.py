@@ -30,6 +30,7 @@ from pipeline import (
     PipelineContext,
     Router,
     Retriever,
+    SemanticCache,
 )
 
 
@@ -219,6 +220,50 @@ def eval_output_guard(suite: EvalSuite) -> None:
         )
 
 
+def eval_semantic_cache(suite: EvalSuite) -> None:
+    """SemanticCache의 적중/미스 동작을 평가합니다."""
+    cache = SemanticCache()
+
+    # 캐시 비어있을 때 미스
+    ctx1 = PipelineContext(query="연차 잔여일이 얼마나 남았나요?", is_safe_input=True)
+    ctx1 = cache.process(ctx1)
+    suite.add(
+        "SemanticCache: 빈 캐시 미스",
+        ctx1.cache_hit is False,
+        "빈 캐시에서 적중이 발생하였습니다",
+    )
+
+    # 캐시에 저장
+    cache.store("연차 잔여일이 얼마나 남았나요?", "캐시된 응답입니다.", "HR", "gpt-4o-mini")
+
+    # 동일 질문 적중
+    ctx2 = PipelineContext(query="연차 잔여일이 얼마나 남았나요?", is_safe_input=True)
+    ctx2 = cache.process(ctx2)
+    suite.add(
+        "SemanticCache: 동일 질문 적중",
+        ctx2.cache_hit is True,
+        "동일 질문에 캐시 적중이 발생하지 않았습니다",
+    )
+
+    # 유사 질문 적중
+    ctx3 = PipelineContext(query="연차 잔여일이 몇 일 남았나요?", is_safe_input=True)
+    ctx3 = cache.process(ctx3)
+    suite.add(
+        "SemanticCache: 유사 질문 적중",
+        ctx3.cache_hit is True,
+        "유사 질문에 캐시 적중이 발생하지 않았습니다",
+    )
+
+    # 다른 질문 미스
+    ctx4 = PipelineContext(query="서버 배포 절차를 알려주세요", is_safe_input=True)
+    ctx4 = cache.process(ctx4)
+    suite.add(
+        "SemanticCache: 다른 질문 미스",
+        ctx4.cache_hit is False,
+        "관련 없는 질문에 캐시 적중이 발생하였습니다",
+    )
+
+
 # ──────────────────────────────────────────────
 # 2. 적대적 평가 (Adversarial Eval)
 # ──────────────────────────────────────────────
@@ -357,7 +402,7 @@ def eval_properties(suite: EvalSuite) -> None:
         )
 
         # 속성 3: 모든 단계의 타이밍이 기록되어야 한다
-        expected_stages = {"InputGuard", "Router", "Retriever", "Generator", "OutputGuard", "Logger"}
+        expected_stages = {"InputGuard", "SemanticCache", "Router", "Retriever", "Generator", "OutputGuard", "Logger"}
         recorded_stages = set(result.stage_timings.keys())
         suite.add(
             f"속성: 모든 단계 타이밍 기록 — '{q_short}...'",
@@ -521,6 +566,7 @@ def main() -> None:
 
     s1 = EvalSuite("컴포넌트 평가")
     eval_input_guard(s1)
+    eval_semantic_cache(s1)
     eval_router(s1)
     eval_retriever(s1)
     eval_output_guard(s1)
