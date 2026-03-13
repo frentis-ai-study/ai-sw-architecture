@@ -1,15 +1,18 @@
 """
 아키텍처 심의위원회(ARB) — 오케스트레이터
 ==========================================
-설계 제안서를 4명의 전문가 에이전트에게 전달하고,
-리뷰 결과를 수집하여 종합 심의 보고서를 생성합니다.
+AgentCard 기반 동적 탐색으로 전문가 에이전트를 발견하고,
+설계 제안서 리뷰를 수집하여 종합 심의 보고서를 생성합니다.
 
-사전 조건:
-  - agents.py가 실행 중이어야 합니다 (port 5001~5004)
+핵심 포인트:
+  - 오케스트레이터는 에이전트 목록을 하드코딩하지 않습니다.
+  - 지정된 포트 범위를 스캔하여 A2A AgentCard를 가진 서버를 자동 발견합니다.
+  - 새 에이전트를 추가하려면 해당 포트에서 서버를 실행하기만 하면 됩니다.
 
 실행:
-  python solution/orchestrator.py              # 규칙 기반 분석
-  python solution/orchestrator.py --use-llm    # LLM 기반 분석 (API 키 필요)
+  uv run python solution/orchestrator.py                                     # v1 심의
+  uv run python solution/orchestrator.py --proposal design_proposal_v2.json  # v2 재심의
+  uv run python solution/orchestrator.py --ports 5001-5010                   # 포트 범위 지정
 """
 
 import argparse
@@ -18,6 +21,7 @@ import sys
 import time
 from pathlib import Path
 
+import requests
 from python_a2a import A2AClient, Message, MessageRole, TextContent
 
 
@@ -65,16 +69,37 @@ def print_finding(finding, index):
 
 
 # ============================================================
-# 에이전트 설정
+# 에이전트 동적 발견 (AgentCard 기반)
 # ============================================================
-AGENTS = [
-    {"name": "보안 리뷰 에이전트", "url": "http://localhost:5001", "icon": "[보안]"},
-    {"name": "성능 리뷰 에이전트", "url": "http://localhost:5002", "icon": "[성능]"},
-    {"name": "비용 리뷰 에이전트", "url": "http://localhost:5003", "icon": "[비용]"},
-    {"name": "운영 리뷰 에이전트", "url": "http://localhost:5004", "icon": "[운영]"},
-]
+AGENT_COLORS = [Colors.RED, Colors.BLUE, Colors.YELLOW, Colors.GREEN, Colors.CYAN, Colors.HEADER]
 
-AGENT_COLORS = [Colors.RED, Colors.BLUE, Colors.YELLOW, Colors.GREEN]
+
+def discover_agents(port_start: int = 5001, port_end: int = 5004) -> list[dict]:
+    """포트 범위를 스캔하여 A2A AgentCard를 가진 에이전트를 발견합니다.
+
+    이것이 A2A 프로토콜의 핵심 차별점입니다.
+    오케스트레이터는 에이전트 목록을 하드코딩하지 않고,
+    AgentCard(/.well-known/agent.json)를 통해 런타임에 에이전트를 발견합니다.
+    새 에이전트를 추가하려면 해당 포트에서 서버를 실행하기만 하면 됩니다.
+    """
+    agents = []
+    for port in range(port_start, port_end + 1):
+        url = f"http://localhost:{port}"
+        try:
+            resp = requests.get(f"{url}/.well-known/agent.json", timeout=1)
+            if resp.status_code == 200:
+                card = resp.json()
+                agents.append({
+                    "name": card.get("name", f"Agent:{port}"),
+                    "description": card.get("description", ""),
+                    "url": url,
+                    "icon": f"[{card.get('name', str(port)).split()[0]}]",
+                })
+        except requests.ConnectionError:
+            pass
+        except Exception:
+            pass
+    return agents
 
 
 # ============================================================
@@ -94,43 +119,67 @@ def load_proposal(filename: str = "design_proposal.json"):
 # ============================================================
 # 에이전트 리뷰 수집
 # ============================================================
-def collect_reviews(proposal):
-    """각 전문가 에이전트에게 설계안을 전송하고 리뷰를 수집합니다."""
+def _review_single_agent(agent_info, proposal_text):
+    """단일 에이전트에게 리뷰를 요청합니다 (병렬 실행용)."""
+    try:
+        client = A2AClient(agent_info["url"])
+        message = Message(
+            role=MessageRole.USER,
+            content=TextContent(text=proposal_text),
+        )
+
+        start_time = time.time()
+        response = client.send_message(message)
+        elapsed = time.time() - start_time
+
+        response_text = None
+        if hasattr(response, "content") and response.content:
+            response_text = response.content.text
+
+        if response_text:
+            review = json.loads(response_text)
+            # 필수 필드 검증
+            if "verdict" not in review:
+                review["verdict"] = "오류"
+            if "findings" not in review:
+                review["findings"] = []
+            if "agent" not in review:
+                review["agent"] = agent_info.get("name", "알 수 없음")
+            return {"review": review, "elapsed": elapsed}
+    except Exception as e:
+        return {"error": str(e)}
+    return {"error": "응답 파싱 실패"}
+
+
+def collect_reviews(proposal, agents):
+    """발견된 에이전트에게 설계안을 병렬 전송하고 리뷰를 수집합니다."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     proposal_text = json.dumps(proposal, ensure_ascii=False)
     reviews = []
 
-    for i, agent_info in enumerate(AGENTS):
-        color = AGENT_COLORS[i]
-        print(f"\n  {color}{Colors.BOLD}{agent_info['icon']}{Colors.END} "
-              f"{agent_info['name']}에게 리뷰를 요청합니다...")
+    print(f"\n  {len(agents)}명의 전문가에게 동시에 리뷰를 요청합니다...")
 
-        try:
-            client = A2AClient(agent_info["url"])
-            message = Message(
-                role=MessageRole.USER,
-                content=TextContent(text=proposal_text),
-            )
+    futures = {}
+    with ThreadPoolExecutor(max_workers=len(agents)) as executor:
+        for i, agent_info in enumerate(agents):
+            future = executor.submit(_review_single_agent, agent_info, proposal_text)
+            futures[future] = (i, agent_info)
 
-            start_time = time.time()
-            response = client.send_message(message)
-            elapsed = time.time() - start_time
+        for future in as_completed(futures):
+            i, agent_info = futures[future]
+            color = AGENT_COLORS[i % len(AGENT_COLORS)]
+            result = future.result()
 
-            # 응답에서 에이전트 메시지 추출
-            response_text = None
-            if hasattr(response, "content") and response.content:
-                response_text = response.content.text
-
-            if response_text:
-                review = json.loads(response_text)
+            if "review" in result:
+                review = result["review"]
                 reviews.append(review)
-                print(f"  {color}  응답 수신 완료 ({elapsed:.1f}초) "
-                      f"- 판정: {review['verdict']}{Colors.END}")
+                print(f"  {color}{Colors.BOLD}{agent_info['icon']}{Colors.END} "
+                      f"{agent_info['name']}: "
+                      f"{color}{review['verdict']}{Colors.END} "
+                      f"({result['elapsed']:.1f}초)")
             else:
-                print(f"  {Colors.RED}  응답 파싱 실패{Colors.END}")
-
-        except Exception as e:
-            print(f"  {Colors.RED}  연결 실패: {e}{Colors.END}")
-            print(f"  {Colors.RED}  agents.py가 실행 중인지 확인하십시오.{Colors.END}")
+                print(f"  {Colors.RED}{agent_info['icon']} 실패: {result['error']}{Colors.END}")
 
     return reviews
 
@@ -141,9 +190,6 @@ def collect_reviews(proposal):
 def analyze_conflicts(reviews):
     """에이전트 간 상충하는 의견을 식별합니다."""
     conflicts = []
-
-    # 에이전트별 verdict 수집
-    verdicts = {r["agent"]: r["verdict"] for r in reviews}
 
     # 충돌 1: 성능 vs 비용 (스케일링 긍정 vs TCO 우려)
     perf_review = next((r for r in reviews if r["agent"] == "성능 리뷰 에이전트"), None)
@@ -251,7 +297,7 @@ def generate_final_report(proposal, reviews, conflicts):
     # 에이전트별 판정 요약
     print_section("2. 전문가별 판정", Colors.BLUE)
     for i, review in enumerate(reviews):
-        color = AGENT_COLORS[i]
+        color = AGENT_COLORS[i % len(AGENT_COLORS)]
         v = review["verdict"]
         if v == "반려":
             v_color = Colors.RED
@@ -330,7 +376,14 @@ def main():
         default="design_proposal.json",
         help="제안서 파일명 (기본: design_proposal.json, v2: design_proposal_v2.json)",
     )
+    parser.add_argument(
+        "--ports",
+        default="5001-5004",
+        help="에이전트 탐색 포트 범위 (기본: 5001-5004)",
+    )
     args = parser.parse_args()
+
+    port_start, port_end = (int(p) for p in args.ports.split("-"))
 
     # 1. 설계 제안서 로드
     print_header("아키텍처 심의위원회(ARB) 시작")
@@ -340,13 +393,31 @@ def main():
     print(f"  예산: {proposal['proposed_changes']['budget']}")
     print(f"  기간: {proposal['proposed_changes']['timeline']}")
 
-    # 2. 전문가 에이전트에게 리뷰 요청
-    print_section("전문가 리뷰 수집", Colors.CYAN)
-    reviews = collect_reviews(proposal)
+    # 2. 에이전트 동적 발견 (AgentCard 기반)
+    print_section("에이전트 탐색 (AgentCard Discovery)", Colors.CYAN)
+    print(f"  포트 {port_start}~{port_end} 범위에서 A2A 에이전트를 탐색합니다...")
+
+    agents = discover_agents(port_start, port_end)
+
+    if not agents:
+        print(f"\n{Colors.RED}오류: 발견된 에이전트가 없습니다. "
+              f"agents_server.py가 실행 중인지 확인하십시오.{Colors.END}")
+        sys.exit(1)
+
+    for i, agent in enumerate(agents):
+        color = AGENT_COLORS[i % len(AGENT_COLORS)]
+        print(f"  {color}  발견: {agent['name']}{Colors.END} ({agent['url']})")
+        if agent["description"]:
+            print(f"  {Colors.BOLD}        {agent['description']}{Colors.END}")
+
+    print(f"\n  {Colors.GREEN}{len(agents)}개의 전문가 에이전트를 발견했습니다.{Colors.END}")
+
+    # 3. 전문가 에이전트에게 병렬 리뷰 요청
+    print_section("전문가 리뷰 수집 (병렬)", Colors.CYAN)
+    reviews = collect_reviews(proposal, agents)
 
     if not reviews:
-        print(f"\n{Colors.RED}오류: 수집된 리뷰가 없습니다. "
-              f"agents.py가 실행 중인지 확인하십시오.{Colors.END}")
+        print(f"\n{Colors.RED}오류: 수집된 리뷰가 없습니다.{Colors.END}")
         sys.exit(1)
 
     print(f"\n  {Colors.GREEN}{len(reviews)}명의 전문가로부터 리뷰를 수집했습니다.{Colors.END}")

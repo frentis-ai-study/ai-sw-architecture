@@ -101,7 +101,7 @@ class BaseReviewAgent(A2AServer):
                     {"role": "system", "content": full_prompt},
                     {"role": "user", "content": f"아래 설계 제안서를 리뷰하십시오.\n\n{proposal_text}"},
                 ],
-                temperature=0.3,
+                max_completion_tokens=1024,
             )
 
             raw = response.choices[0].message.content.strip()
@@ -110,9 +110,12 @@ class BaseReviewAgent(A2AServer):
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
                     raw = raw[4:]
-            return json.loads(raw)
-        except Exception:
+            result = json.loads(raw)
+            print(f"  [{self.agent_name}] LLM 분석 완료 (model={self.model})")
+            return result
+        except Exception as e:
             # LLM 호출 또는 파싱 실패 시 규칙 기반 폴백
+            print(f"  [{self.agent_name}] LLM 폴백: {type(e).__name__}: {e}")
             return self.analyze_rule_based(self._parse_proposal(proposal_text))
 
     def analyze_rule_based(self, proposal: dict) -> dict:
