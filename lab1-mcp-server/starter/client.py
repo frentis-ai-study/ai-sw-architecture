@@ -59,7 +59,8 @@ async def chat_loop():
 
         print(f"연결 완료! 사용 가능한 도구 {len(mcp_tools)}개:")
         for tool in mcp_tools:
-            print(f"  - {tool.name}: {tool.description[:50]}...")
+            desc_first_line = (tool.description or "").split("\n")[0]
+            print(f"  - {tool.name}: {desc_first_line}")
         print()
         print("질문을 입력하세요 (종료: quit)")
         print("-" * 60)
