@@ -44,8 +44,32 @@ def search_hr_policy(query: str) -> str:
 
 
 @mcp.tool
+def find_employee(name: str) -> list[dict]:
+    """직원 이름(또는 일부)으로 사번 후보를 검색합니다.
+
+    이름만 알고 사번을 모를 때 먼저 호출하여 employee_id를 확보한 뒤,
+    get_leave_balance 등 다른 도구를 호출하십시오.
+
+    Args:
+        name: 직원 이름 또는 일부 (예: "김민수", "김")
+
+    Returns:
+        매칭되는 직원의 employee_id, name, department, position 목록.
+        결과가 없으면 빈 리스트를 반환합니다.
+    """
+    # TODO: 여기에 구현하세요
+    # 힌트 1: load_json("employees.json")으로 직원 데이터를 불러옵니다
+    # 힌트 2: emp["name"]에 검색어가 포함된(in) 직원만 필터링합니다
+    # 힌트 3: employee_id, name, department, position 필드만 골라서 dict 리스트로 반환합니다
+    raise NotImplementedError("TODO: 이 함수를 구현하십시오")
+
+
+@mcp.tool
 def get_leave_balance(employee_id: str) -> dict:
     """직원의 연차 잔여일을 조회합니다.
+
+    이름만 알고 사번을 모르는 경우 먼저 find_employee를 호출해
+    employee_id를 확보한 뒤 이 도구를 호출하십시오.
 
     Args:
         employee_id: 직원 사번 (예: "EMP-001")

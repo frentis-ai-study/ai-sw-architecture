@@ -145,11 +145,21 @@ async def chat_loop():
                     result = await mcp_client.call_tool(tool_name, tool_args)
 
                     # 도구 실행 결과를 대화 기록에 추가
-                    result_text = (
-                        result.data
-                        if isinstance(result.data, str)
-                        else json.dumps(result.data, ensure_ascii=False)
-                    )
+                    # MCP 표준 응답인 content 블록(TextContent)을 사용합니다.
+                    # result.data는 list[dict] 반환 시 pydantic Root 인스턴스가 섞여
+                    # json 직렬화가 깨질 수 있으나, content[*].text는 이미 직렬화된 문자열입니다.
+                    if result.content:
+                        result_text = "\n".join(
+                            block.text
+                            for block in result.content
+                            if hasattr(block, "text")
+                        )
+                    else:
+                        result_text = json.dumps(
+                            result.structured_content or {},
+                            ensure_ascii=False,
+                            default=str,
+                        )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
