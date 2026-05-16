@@ -46,7 +46,7 @@ class BaseReviewAgent(A2AServer):
     # 서브클래스에서 반드시 정의
     agent_name: str = ""
     system_prompt: str = ""
-    model: str = "gpt-5-mini"
+    model: str = "gpt-5.4-mini"
 
     def __init__(self, agent_card):
         super().__init__(agent_card)

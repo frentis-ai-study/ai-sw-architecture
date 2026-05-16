@@ -31,7 +31,7 @@ console = Console()
 SERVER_PATH = str(os.path.join(os.path.dirname(__file__), "server.py"))
 
 # OpenAI 모델 설정
-MODEL = "gpt-5-mini"  # 비용 효율적 선택. gpt-5나 o4-mini도 사용 가능
+MODEL = "gpt-5.4-mini"  # 비용 효율적 선택. gpt-5나 o4-mini도 사용 가능
 
 
 def mcp_tools_to_openai_tools(mcp_tools: list) -> list[dict]:

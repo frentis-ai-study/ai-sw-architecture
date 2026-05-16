@@ -287,9 +287,9 @@ class Router:
     }
 
     MODEL_MAP: dict[str, str] = {
-        "HR": "gpt-5-mini",
+        "HR": "gpt-5.4-mini",
         "IT": "gpt-5",
-        "일반": "gpt-5-mini",
+        "일반": "gpt-5.4-mini",
     }
 
     MODEL_REASON: dict[str, str] = {
